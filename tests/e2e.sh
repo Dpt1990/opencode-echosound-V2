@@ -27,7 +27,7 @@ command -v opencode >/dev/null 2>&1 || die "opencode not on PATH"
 [[ -f "$REPO_DIR/plugin/soundboard.js" ]] || die "plugin sources missing"
 
 PLUGIN_INSTALLED=0
-for candidate in "$CONFIG_DIR/plugin/soundboard.js" "$CONFIG_DIR/plugins/soundboard.js"; do
+for candidate in "$CONFIG_DIR/plugins/echosound/index.js" "$CONFIG_DIR/plugin/echosound/index.js"; do
   [[ -f "$candidate" ]] && PLUGIN_INSTALLED=1
 done
 [[ "$PLUGIN_INSTALLED" -eq 1 ]] || die "plugin not installed in $CONFIG_DIR (run ./install.sh first)"

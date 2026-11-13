@@ -49,22 +49,18 @@ check "tests/core.test.mjs" node --check tests/core.test.mjs
 ok "=== plugin contract ==="
 if node -e '
   import("./plugin/soundboard.js").then((mod) => {
-    const names = Object.keys(mod).filter((k) => k !== "default")
-    if (names.length !== 1 || names[0] !== "SoundboardPlugin") {
-      console.error("opencode calls every export as a plugin; expected only SoundboardPlugin, got:", names.join(","))
-      process.exit(1)
-    }
-    if (typeof mod.SoundboardPlugin !== "function") process.exit(1)
+    const plugin = mod.default
+    if (!plugin || plugin.id !== "opencode-echosound" || typeof plugin.setup !== "function") process.exit(1)
   })
 ' >/dev/null 2>&1; then
-  ok "plugin exports exactly one callable plugin"
+  ok "plugin default-exports an opencode 2 definition (id + setup)"
 else
-  bad "plugin must export only SoundboardPlugin"
+  bad "plugin must default-export { id: \"opencode-echosound\", setup }"
 fi
 
 ok "=== unit tests ==="
 if node --test "tests/*.test.mjs" >/tmp/echosound-tests.$$ 2>&1; then
-  ok "$(grep -E '^ℹ (tests|pass)' /tmp/echosound-tests.$$ | tr '\n' ' ')"
+  ok "$(grep -E '^(ℹ|#) (tests|pass)' /tmp/echosound-tests.$$ | tr '\n' ' ')"
   rm -f /tmp/echosound-tests.$$
 else
   bad "unit tests failed"

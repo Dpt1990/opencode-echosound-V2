@@ -1,4 +1,8 @@
-# opencode-echosound
+# opencode-echosound V2
+
+> **For opencode 2.** This is a port of
+> [rur1k1d/opencode-echosound](https://github.com/rur1k1d/opencode-echosound)
+> to the opencode 2 plugin API. On opencode 1, use the original.
 
 Non-blocking sound hooks for [opencode](https://opencode.ai): a chime when a
 session starts, a softer one when the agent goes idle, an alert on errors, and a
@@ -15,6 +19,9 @@ session.error    ->  error.wav        something broke
 permission.asked ->  ping.wav         it needs your yes
 ```
 
+On opencode 2 the turn-finished and error cues fire on
+`session.execution.succeeded` and `session.execution.failed`.
+
 ## Why not just put a shell command in a custom command?
 
 You can, and it works, but then the sound costs a model turn: the agent has to
@@ -23,7 +30,8 @@ opencode's own event stream, so playback is deterministic, instant, and free.
 
 ## Requirements
 
-- opencode 1.18 or newer (uses the documented plugin hooks)
+- opencode 2 (uses the V2 plugin API: `export default { id, setup }` and
+  `ctx.event.subscribe()`); V1 plugin files do not load in opencode 2
 - one audio player: `mpv`, `ffplay`, `mpg123`, `paplay`, `afplay`, or
   PowerShell on Windows
 - Node.js only if you want to run the tests
@@ -31,15 +39,20 @@ opencode's own event stream, so playback is deterministic, instant, and free.
 ## Install
 
 ```bash
-git clone https://github.com/rur1k1d/opencode-echosound.git
-cd opencode-echosound
+git clone https://github.com/Dpt1990/opencode-echosound-V2.git
+cd opencode-echosound-V2
 ./install.sh
 ```
 
-Restart opencode afterwards. The installer copies the plugin into
-`~/.config/opencode/plugins/`, copies the default cues into
+opencode picks the plugin up on its own (`/reload` forces it). The installer
+copies the plugin into `~/.config/opencode/plugins/echosound/` (`index.js` plus
+`soundboard-core.js`), removes the old V1 files `plugins/soundboard.js` and
+`plugins/soundboard-core.js` if present, copies the default cues into
 `~/.config/opencode/sounds/`, and writes `~/.config/opencode/sounds.json` only if
 that file does not exist yet.
+
+The plugin lives in its own directory because opencode 2 tries to load every
+file directly under `plugins/` as a separate plugin.
 
 | Flag | Effect |
 |---|---|
@@ -78,11 +91,14 @@ that file does not exist yet.
 | `throttleMs` | ignore repeats of the same sound inside this window |
 | `debug` | log every playback decision to the opencode log |
 | `events` | event name to sound, or `null` / `"off"` to mute one event |
-| `commands` | optional slash-command name to sound |
+| `commands` | not played on opencode 2 (no `command.execute.before` hook); kept so old configs still parse |
 
 Event names: `session.created`, `session.idle`, `session.error`,
 `permission.asked`. The alias `permission.ask` works in the config too, and both
-spellings can be mapped.
+spellings can be mapped. opencode 2 never emits `session.idle`: a finished turn
+arrives as `session.execution.succeeded` and plays the `session.idle` sound, a
+failed one as `session.execution.failed` and plays the `session.error` sound. Any other event
+type from the opencode 2 stream can be mapped by its exact name.
 
 Paths are resolved relative to the config file's directory, and `~` plus `$VARS`
 are expanded. The config is re-read whenever it changes on disk, so edits apply
@@ -113,16 +129,18 @@ finished task stays quiet while an error cuts through:
 }
 ```
 
-### Sound for a specific command
+### Only one sound
+
+Set every other event to `"off"`. For a chime only when the agent finishes:
 
 ```json
-"commands": {
-  "deploy": "sounds/blip.wav",
-  "review": { "file": "sounds/ping.wav", "volume": 50 }
+"events": {
+  "session.created": "off",
+  "session.idle": "sounds/done-soft.wav",
+  "session.error": "off",
+  "permission.asked": "off"
 }
 ```
-
-Unknown command names are ignored, so this can never break a command.
 
 ### Kill switch
 
@@ -149,17 +167,18 @@ also disables playback. Handy on remote boxes and in pipelines.
 
 | Symptom | Cause and fix |
 |---|---|
-| No sound at all | Set `"debug": true`, then `opencode --print-logs --log-level DEBUG` and look for `opencode-echosound` lines. |
+| No sound at all | Check `~/.local/share/opencode/log/opencode.log` for `failed to load plugin`. `Plugin must export a default definition` means an old V1 copy is still installed: rerun `./install.sh`. |
+| Still silent | Set `"debug": true`: the plugin writes event types, playback decisions and the player's exit code to `~/.local/share/opencode/echosound.log` (the opencode service discards stdout). Payload text is never logged. |
 | `no audio player found on PATH` | Install `mpv` or `ffplay`, or set `"player"` to an absolute path of any executable. |
 | `sound file not found` | Paths resolve relative to `sounds.json`; `sounds/x.wav` means `~/.config/opencode/sounds/x.wav`. |
 | Silent on a remote box | No audio device, or PipeWire is not running for that user. Check with `mpv sounds/startup.wav`. |
-| Sound plays twice | Something else also plays it: a prompt-injected cue command, or a `commands` entry plus a manual cue. Pick one mechanism. |
+| Sound plays twice | Something else also plays it, such as a prompt-injected cue command. Pick one mechanism. |
 | PowerShell only plays WAV | `System.Media.SoundPlayer` is WAV-only. Use mpv or ffplay for mp3/m4a on Windows. |
 
 ## Tests
 
 ```bash
-./tests/run.sh              # syntax, plugin contract, 24 unit tests
+./tests/run.sh              # syntax, plugin contract, 25 unit tests
 ECHOSOUND_E2E=1 ./tests/run.sh   # plus a real opencode session (costs a few tokens)
 ```
 
@@ -182,3 +201,7 @@ them gone.
 MIT, see [LICENSE](LICENSE). Not affiliated with opencode. The generated WAV cues
 are synthesized from scratch by `tools/make_sounds.py`, so there are no
 third-party audio assets or licensing questions.
+
+Originally written by rur1k1d
+([github.com/rur1k1d/opencode-echosound](https://github.com/rur1k1d/opencode-echosound)).
+Modified by Di Pierro to support the opencode 2 plugin API.

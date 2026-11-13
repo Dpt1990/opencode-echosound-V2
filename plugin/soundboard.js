@@ -1,38 +1,39 @@
+import { appendFileSync, mkdirSync } from "node:fs"
+import { homedir } from "node:os"
+import { dirname, join } from "node:path"
 import {
   createConfigStore,
   createThrottle,
   isDisabled,
-  planCommandSound,
   planEventSound,
   playSound,
   resolveEventKey,
   selectPlayer,
 } from "./soundboard-core.js"
 
-const baseDirOf = (directory, worktree) => directory || worktree || process.cwd()
+const PLUGIN_ID = "opencode-echosound"
 
-export const SoundboardPlugin = async ({ client, directory, worktree, env = process.env } = {}) => {
+// One opencode server can load the plugin once per location while every
+// instance sees the same event stream, so remember played event ids process-wide.
+const SEEN_KEY = Symbol.for("opencode-echosound.seen")
+const seen = (globalThis[SEEN_KEY] ??= new Set())
+
+const firstSeen = (event) => {
+  const id = event?.id
+  if (typeof id !== "string") return true
+  if (seen.has(id)) return false
+  seen.add(id)
+  if (seen.size > 500) seen.delete(seen.values().next().value)
+  return true
+}
+
+export function createEchosound({ directory, env = process.env, log = () => {} } = {}) {
   const store = createConfigStore({ env, directory })
-  const baseDir = baseDirOf(directory, worktree)
+  const fallbackDir = directory || process.cwd()
   let throttle = null
   let throttleStamp = null
   let playerCache = null
   let playerStamp = null
-
-  const log = async (level, message, extra) => {
-    try {
-      await client?.app?.log?.({
-        body: {
-          service: "opencode-echosound",
-          level,
-          message,
-          extra: extra ?? {},
-        },
-      })
-    } catch {
-      return
-    }
-  }
 
   const runtime = () => {
     const state = store.get()
@@ -51,73 +52,94 @@ export const SoundboardPlugin = async ({ client, directory, worktree, env = proc
     return { state, player: playerCache, throttle }
   }
 
-  const announceProblems = async (state, player) => {
-    if (state.error) await log("error", state.error)
-    if (player?.error) await log("warn", player.error)
+  return function handleEvent(event) {
+    try {
+      const type = event?.type
+      if (!type) return
+      const { state, player, throttle: gate } = runtime()
+      if (state.config.debug && !QUIET_EVENT.test(type)) log("debug", `event ${type}`, eventSummary(event))
+      const gateState = isDisabled({ config: state.config, env })
+      if (gateState.disabled) {
+        if (state.config.debug) log("debug", `skipped ${type}: ${gateState.reason}`)
+        return
+      }
+      const key = resolveEventKey(state.config, type)
+      if (!key) return
+      if (!firstSeen(event)) return
+      if (!gate.allow(key)) return
+      if (state.error) log("error", state.error)
+      if (player?.error) log("warn", player.error)
+      // relative sound paths are relative to the sounds.json that named them
+      const baseDir = state.path ? dirname(state.path) : fallbackDir
+      const plan = planEventSound({ config: state.config, eventType: key, baseDir, player })
+      if (!plan) return
+      if (!plan.exists) {
+        log("warn", `sound file not found for ${type}: ${plan.path}`)
+        return
+      }
+      const onExit = state.config.debug ? (outcome) => log("debug", `player exited for ${type}`, outcome) : undefined
+      const result = playSound({ player, file: plan.path, volume: plan.volume, env, onExit })
+      if (state.config.debug) {
+        log(result.ok ? "info" : "error", `${type} -> ${plan.path} (${plan.volume}%)`, result.ok ? { player: player.name, args: result.args } : { error: result.error })
+      }
+    } catch (error) {
+      log("error", "event handler failed", { error: error instanceof Error ? error.message : String(error) })
+    }
   }
+}
 
-  const handle = async (plan, state, player, kind) => {
-    if (!plan) return
-    if (!plan.exists) {
-      await log("warn", `sound file not found for ${kind}: ${plan.path}`)
+// Event payloads carry prompts, reasoning and tool input; log only identifiers.
+const SUMMARY_KEYS = ["sessionID", "status", "finish", "error"]
+
+function eventSummary(event) {
+  const data = event?.data ?? event?.properties
+  if (!data || typeof data !== "object") return undefined
+  const summary = {}
+  for (const key of SUMMARY_KEYS) {
+    const value = data[key]
+    if (value === undefined) continue
+    summary[key] = typeof value === "object" && value !== null ? JSON.stringify(value).slice(0, 120) : String(value).slice(0, 120)
+  }
+  return summary
+}
+
+const QUIET_EVENT = /(\.delta|\.streamed|\.progress|^session\.tool\.|^shell\.|^session\.usage\.)/
+
+// The opencode service sends stdout to /dev/null, so debug output goes to a file.
+export const DEBUG_LOG_PATH = join(homedir(), ".local", "share", "opencode", "echosound.log")
+
+function createFileLog({ env = process.env, directory } = {}) {
+  const store = createConfigStore({ env, directory })
+  return (level, message, extra) => {
+    try {
+      if (!store.get().config.debug && level !== "error") return
+      mkdirSync(dirname(DEBUG_LOG_PATH), { recursive: true })
+      const tail = extra === undefined ? "" : ` ${JSON.stringify(extra)}`
+      appendFileSync(DEBUG_LOG_PATH, `${new Date().toISOString()} ${level} ${message}${tail}\n`)
+    } catch {
       return
     }
-    const result = playSound({ player, file: plan.path, volume: plan.volume, env })
-    if (state.config.debug) {
-      await log(
-        result.ok ? "info" : "error",
-        `${kind} -> ${plan.path} (${plan.volume}%)`,
-        result.ok ? { player: player.name } : { error: result.error },
-      )
-    }
   }
+}
 
-  return {
-    event: async ({ event } = {}) => {
-      try {
-        const type = event?.type
-        if (!type) return
-        const { state, player, throttle: gate } = runtime()
-        const gateState = isDisabled({ config: state.config, env })
-        if (gateState.disabled) {
-          if (state.config.debug) await log("debug", `skipped ${type}: ${gateState.reason}`)
-          return
-        }
-        const key = resolveEventKey(state.config, type)
-        if (!key) return
-        if (!gate.allow(key)) return
-        await announceProblems(state, player)
-        const plan = planEventSound({
-          config: state.config,
-          eventType: key,
-          baseDir,
-          player,
-        })
-        await handle(plan, state, player, type)
-      } catch (error) {
-        await log("error", "event hook failed", { error: error instanceof Error ? error.message : String(error) })
-      }
-    },
+export default {
+  id: PLUGIN_ID,
+  setup(ctx) {
+    const controller = new AbortController()
+    const directory = ctx?.location?.directory
+    const log = createFileLog({ directory })
+    const handleEvent = createEchosound({ directory, log })
+    log("debug", "setup", { directory: directory ?? null })
 
-    "command.execute.before": async (input = {}) => {
-      try {
-        const command = typeof input.command === "string" ? input.command : null
-        if (!command) return
-        const { state, player, throttle: gate } = runtime()
-        const gateState = isDisabled({ config: state.config, env })
-        if (gateState.disabled) return
-        const key = `command:${command}`
-        if (!gate.allow(key)) return
-        const plan = planCommandSound({
-          config: state.config,
-          command,
-          baseDir,
-          player,
-        })
-        await handle(plan, state, player, `command ${command}`)
-      } catch (error) {
-        await log("error", "command hook failed", { error: error instanceof Error ? error.message : String(error) })
+    void (async () => {
+      for await (const event of ctx.event.subscribe({ signal: controller.signal })) {
+        handleEvent(event)
       }
-    },
-  }
+      log("debug", "event stream ended", { aborted: controller.signal.aborted })
+    })().catch((error) => {
+      if (!controller.signal.aborted) log("error", "event stream stopped", { error: error instanceof Error ? error.message : String(error) })
+    })
+
+    return () => controller.abort()
+  },
 }

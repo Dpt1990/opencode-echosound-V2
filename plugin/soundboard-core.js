@@ -16,6 +16,9 @@ export const KNOWN_EVENTS = [
 
 export const EVENT_ALIASES = {
   "permission.ask": "permission.asked",
+  // opencode 2 ends a turn with session.execution.succeeded and never emits session.idle
+  "session.execution.succeeded": "session.idle",
+  "session.execution.failed": "session.error",
 }
 
 export function resolveEventKey(config, eventType) {
@@ -60,7 +63,8 @@ export const PLAYERS = {
     String(Math.max(1, Math.round((32768 * clampVolume(volume)) / 100))),
     file,
   ],
-  paplay: (file, volume) => ["--volume=" + clampVolume(volume) + "%", file],
+  // paplay takes a linear 0..65536 volume; "70%" would be read as 70/65536, i.e. silence
+  paplay: (file, volume) => ["--volume=" + Math.round((65536 * clampVolume(volume)) / 100), file],
   afplay: (file, volume) => ["-v", (clampVolume(volume) / 100).toFixed(2), file],
   powershell: (file) => [
     "-NoProfile",
@@ -296,17 +300,27 @@ export function buildArgs(player, file, volume) {
   return args.filter((part) => typeof part === "string")
 }
 
-export function playSound({ player, file, volume, env = process.env }) {
+export function playSound({ player, file, volume, env = process.env, onExit }) {
   const args = buildArgs(player, file, volume)
   if (!player || !player.command || !args || args.length === 0) {
     return { ok: false, error: "nothing to play" }
   }
   try {
+    // stderr is only captured when someone listens for the outcome (debug mode)
     const child = spawn(player.command, args, {
       detached: true,
-      stdio: "ignore",
+      stdio: onExit ? ["ignore", "ignore", "pipe"] : "ignore",
       env,
     })
+    if (onExit) {
+      let stderr = ""
+      child.stderr.on("data", (chunk) => {
+        if (stderr.length < 2000) stderr += chunk
+      })
+      child.on("error", (error) => onExit({ code: null, error: error.message, stderr }))
+      child.on("exit", (code, signal) => onExit({ code, signal, stderr: stderr.trim() }))
+      child.stderr.unref?.()
+    }
     child.unref()
     return { ok: true, pid: child.pid ?? null, command: player.command, args }
   } catch (error) {

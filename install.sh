@@ -3,7 +3,8 @@ set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG_DIR="${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}"
-PLUGIN_DIR="$CONFIG_DIR/plugins"
+PLUGIN_DIR="$CONFIG_DIR/plugins/echosound"
+LEGACY_FILES=("$CONFIG_DIR/plugins/soundboard.js" "$CONFIG_DIR/plugins/soundboard-core.js")
 SOUNDS_DIR="$CONFIG_DIR/sounds"
 PLUGIN_SRC="$REPO_DIR/plugin/soundboard.js"
 CORE_SRC="$REPO_DIR/plugin/soundboard-core.js"
@@ -59,7 +60,7 @@ done
 
 if [[ "$UNINSTALL" -eq 1 ]]; then
   info "uninstall target: $CONFIG_DIR"
-  for target in "$PLUGIN_DIR/soundboard.js" "$PLUGIN_DIR/soundboard-core.js"; do
+  for target in "$PLUGIN_DIR/index.js" "$PLUGIN_DIR/soundboard-core.js" "${LEGACY_FILES[@]}"; do
     if [[ -f "$target" ]]; then
       run rm -f "$target"
       ok "removed $target"
@@ -67,6 +68,9 @@ if [[ "$UNINSTALL" -eq 1 ]]; then
       info "not present: $target"
     fi
   done
+  if [[ -d "$PLUGIN_DIR" ]]; then
+    run rmdir "$PLUGIN_DIR" 2>/dev/null || warn "kept non-empty $PLUGIN_DIR"
+  fi
   if [[ -f "$CONFIG_PATH" ]]; then
     run rm -f "$CONFIG_PATH"
     ok "removed $CONFIG_PATH"
@@ -81,7 +85,7 @@ printf '%s== opencode-echosound installer ==%s\n' "$BOLD" "$OFF"
 info "config dir: $CONFIG_DIR"
 [[ "$DRY_RUN" -eq 1 ]] && warn "dry-run: nothing will be written"
 
-for target in "$PLUGIN_DIR/soundboard.js" "$PLUGIN_DIR/soundboard-core.js"; do
+for target in "$PLUGIN_DIR/index.js" "$PLUGIN_DIR/soundboard-core.js"; do
   if [[ -f "$target" && "$FORCE" -ne 1 ]]; then
     die "already exists: $target (use --force to overwrite)"
   fi
@@ -90,10 +94,18 @@ done
 run mkdir -p "$PLUGIN_DIR"
 ok "plugin dir ready: $PLUGIN_DIR"
 
-run cp "$PLUGIN_SRC" "$PLUGIN_DIR/soundboard.js"
+run cp "$PLUGIN_SRC" "$PLUGIN_DIR/index.js"
 run cp "$CORE_SRC" "$PLUGIN_DIR/soundboard-core.js"
-ok "plugin installed: $PLUGIN_DIR/soundboard.js"
+ok "plugin installed: $PLUGIN_DIR/index.js"
 ok "core installed:    $PLUGIN_DIR/soundboard-core.js"
+
+# V1 layout: opencode 2 tries to load every file in plugins/ as its own plugin
+for legacy in "${LEGACY_FILES[@]}"; do
+  if [[ -f "$legacy" ]]; then
+    run rm -f "$legacy"
+    ok "removed V1 file: $legacy"
+  fi
+done
 
 if [[ "$WITH_SOUNDS" -eq 1 ]]; then
   run mkdir -p "$SOUNDS_DIR"
@@ -138,9 +150,11 @@ elif command -v ffplay >/dev/null 2>&1; then
   ok "player detected: ffplay"
 elif command -v mpg123 >/dev/null 2>&1; then
   ok "player detected: mpg123"
+elif command -v paplay >/dev/null 2>&1; then
+  ok "player detected: paplay (WAV only)"
 else
   warn "no supported player found (mpv, ffplay, mpg123, paplay, afplay, powershell)"
   warn "install one, or set \"player\" in $CONFIG_PATH to an absolute path"
 fi
-info "restart opencode so the plugin is loaded"
+info "opencode picks up the plugin on its own; run /reload if it does not"
 info "toggle anytime: OPENCODE_ECHOSOUND=off  or  \"enabled\": false in $CONFIG_PATH"

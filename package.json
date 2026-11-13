@@ -4,6 +4,7 @@
   "description": "Non-blocking sound hooks for opencode: startup, idle, error and permission chimes.",
   "type": "module",
   "license": "MIT",
+  "author": "rur1k1d",
   "private": true,
   "engines": {
     "node": ">=20"

@@ -229,7 +229,8 @@ test("buildArgs maps volume per player", () => {
   assert.deepEqual(PLAYERS.mpv("/x.wav", 70), ["--really-quiet", "--no-terminal", "--volume=70", "/x.wav"])
   assert.deepEqual(PLAYERS.ffplay("/x.wav", 70), ["-nodisp", "-autoexit", "-loglevel", "quiet", "-volume", "70", "/x.wav"])
   assert.deepEqual(PLAYERS.mpg123("/x.wav", 100), ["-q", "-f", "32768", "/x.wav"])
-  assert.deepEqual(PLAYERS.paplay("/x.wav", 45), ["--volume=45%", "/x.wav"])
+  assert.deepEqual(PLAYERS.paplay("/x.wav", 45), ["--volume=29491", "/x.wav"])
+  assert.deepEqual(PLAYERS.paplay("/x.wav", 100), ["--volume=65536", "/x.wav"])
   assert.deepEqual(PLAYERS.afplay("/x.wav", 45), ["-v", "0.45", "/x.wav"])
   assert.equal(buildArgs(null, "/x.wav", 70), null)
   assert.equal(buildArgs({ build: () => null }, "/x.wav", 70), null)
@@ -272,6 +273,13 @@ test("resolveEventKey maps the permission alias in both directions", () => {
   const aliasConfig = mergeConfig({ events: { "permission.ask": "p.wav" } })
   assert.equal(resolveEventKey(aliasConfig, "permission.asked"), "permission.ask")
   assert.ok(EVENT_ALIASES["permission.ask"])
+})
+
+test("resolveEventKey maps opencode 2 execution events onto session.idle and session.error", () => {
+  const config = mergeConfig({ events: { "session.idle": "d.wav", "session.error": "e.wav" } })
+  assert.equal(resolveEventKey(config, "session.execution.succeeded"), "session.idle")
+  assert.equal(resolveEventKey(config, "session.execution.failed"), "session.error")
+  assert.equal(resolveEventKey(mergeConfig({ events: {} }), "session.execution.failed"), null)
 })
 
 test("planEventSound produces argv only for mapped events with an existing player", () => {
